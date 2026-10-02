@@ -1,168 +1,196 @@
-# Raft Consensus-Based Replicated Log
+# Skip List Index
 
-from dataclasses import dataclass
-
-
-@dataclass
-class LogEntry:
-    term: int
-    command: str
+import random
 
 
-class RaftNode:
-    def __init__(self, node_id):
-        self.node_id = node_id
-        self.current_term = 0
-        self.state = "FOLLOWER"
-        self.log = []
-        self.commit_index = -1
-        self.voted_for = None
+class SkipListNode:
+    def __init__(self, key, value, level):
+        self.key = key
+        self.value = value
+        self.forward = [None] * (level + 1)
 
-    def become_candidate(self):
-        self.state = "CANDIDATE"
-        self.current_term += 1
-        self.voted_for = self.node_id
 
-        print(
-            f"Node {self.node_id} became CANDIDATE "
-            f"for term {self.current_term}"
+class SkipList:
+    def __init__(self, max_level=6, probability=0.5):
+        self.max_level = max_level
+        self.probability = probability
+        self.level = 0
+
+        self.header = SkipListNode(
+            None,
+            None,
+            max_level
         )
 
-    def become_leader(self):
-        self.state = "LEADER"
+    def random_level(self):
+        level = 0
 
-        print(
-            f"Node {self.node_id} became LEADER "
-            f"for term {self.current_term}"
+        while (
+            random.random() < self.probability
+            and level < self.max_level
+        ):
+            level += 1
+
+        return level
+
+    def search(self, key):
+        current = self.header
+
+        for level in range(
+            self.level,
+            -1,
+            -1
+        ):
+            while (
+                current.forward[level]
+                and current.forward[level].key < key
+            ):
+                current = current.forward[level]
+
+        current = current.forward[0]
+
+        if current and current.key == key:
+            return current.value
+
+        return None
+
+    def insert(self, key, value):
+        update = [None] * (
+            self.max_level + 1
         )
 
-    def append_entry(self, command):
-        if self.state != "LEADER":
-            print(
-                f"Node {self.node_id} rejected command: "
-                f"not leader"
-            )
+        current = self.header
+
+        for level in range(
+            self.level,
+            -1,
+            -1
+        ):
+            while (
+                current.forward[level]
+                and current.forward[level].key < key
+            ):
+                current = current.forward[level]
+
+            update[level] = current
+
+        current = current.forward[0]
+
+        if current and current.key == key:
+            current.value = value
             return
 
-        entry = LogEntry(
-            self.current_term,
-            command
+        new_level = self.random_level()
+
+        if new_level > self.level:
+            for level in range(
+                self.level + 1,
+                new_level + 1
+            ):
+                update[level] = self.header
+
+            self.level = new_level
+
+        new_node = SkipListNode(
+            key,
+            value,
+            new_level
         )
 
-        self.log.append(entry)
+        for level in range(new_level + 1):
+            new_node.forward[level] = (
+                update[level].forward[level]
+            )
 
-        print(
-            f"Leader {self.node_id} appended: "
-            f"{command}"
+            update[level].forward[level] = new_node
+
+    def delete(self, key):
+        update = [None] * (
+            self.max_level + 1
         )
 
-    def receive_entries(self, entries, leader_term):
-        if leader_term < self.current_term:
+        current = self.header
+
+        for level in range(
+            self.level,
+            -1,
+            -1
+        ):
+            while (
+                current.forward[level]
+                and current.forward[level].key < key
+            ):
+                current = current.forward[level]
+
+            update[level] = current
+
+        current = current.forward[0]
+
+        if not current or current.key != key:
             return False
 
-        self.current_term = leader_term
-        self.state = "FOLLOWER"
+        for level in range(self.level + 1):
+            if update[level].forward[level] != current:
+                continue
 
-        self.log = [
-            LogEntry(entry.term, entry.command)
-            for entry in entries
-        ]
+            update[level].forward[level] = (
+                current.forward[level]
+            )
+
+        while (
+            self.level > 0
+            and self.header.forward[self.level] is None
+        ):
+            self.level -= 1
 
         return True
 
-    def commit(self):
-        if not self.log:
-            return
+    def display(self):
+        print("\nSkip List")
 
-        self.commit_index = len(self.log) - 1
+        for level in range(
+            self.level,
+            -1,
+            -1
+        ):
+            current = self.header.forward[level]
 
-    def show_log(self):
-        print(
-            f"\nNode {self.node_id} "
-            f"[{self.state}]"
-        )
+            values = []
 
-        for index, entry in enumerate(self.log):
-            status = (
-                "COMMITTED"
-                if index <= self.commit_index
-                else "UNCOMMITTED"
-            )
+            while current:
+                values.append(
+                    f"{current.key}:{current.value}"
+                )
+                current = current.forward[level]
 
             print(
-                f"{index}: "
-                f"term={entry.term}, "
-                f"command={entry.command}, "
-                f"{status}"
+                f"Level {level}: "
+                + " -> ".join(values)
             )
-
-
-class RaftCluster:
-    def __init__(self, node_count):
-        self.nodes = [
-            RaftNode(i)
-            for i in range(node_count)
-        ]
-
-        self.leader = None
-
-    def elect_leader(self, node_id):
-        candidate = self.nodes[node_id]
-
-        candidate.become_candidate()
-
-        votes = 0
-
-        for node in self.nodes:
-            if node.current_term <= candidate.current_term:
-                votes += 1
-
-        majority = len(self.nodes) // 2 + 1
-
-        if votes >= majority:
-            candidate.become_leader()
-            self.leader = candidate
-
-    def replicate(self):
-        if not self.leader:
-            return
-
-        for node in self.nodes:
-            if node is not self.leader:
-                node.receive_entries(
-                    self.leader.log,
-                    self.leader.current_term
-                )
-
-        self.leader.commit()
-
-        for node in self.nodes:
-            node.commit()
-
-    def show_cluster(self):
-        for node in self.nodes:
-            node.show_log()
 
 
 if __name__ == "__main__":
-    cluster = RaftCluster(5)
+    index = SkipList()
 
-    cluster.elect_leader(0)
+    index.insert(10, "Aman")
+    index.insert(20, "Rahul")
+    index.insert(30, "Priya")
+    index.insert(40, "Neha")
+    index.insert(50, "Karan")
+    index.insert(60, "Simran")
 
-    leader = cluster.leader
+    index.display()
 
-    leader.append_entry(
-        "SET user:1 = Aman"
-    )
+    print("\nSearch 30:")
+    print(index.search(30))
 
-    leader.append_entry(
-        "SET balance:1 = 5000"
-    )
+    print("\nSearch 35:")
+    print(index.search(35))
 
-    leader.append_entry(
-        "SET status:1 = ACTIVE"
-    )
+    print("\nDelete 30:")
+    index.delete(30)
 
-    cluster.replicate()
+    index.display()
 
-    cluster.show_cluster()
+    print("\nSearch 30:")
+    print(index.search(30))
