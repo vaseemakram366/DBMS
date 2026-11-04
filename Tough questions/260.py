@@ -39,4 +39,3 @@ server1.check_health()
 print()
 
 server2.check_health()
- 
